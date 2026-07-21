@@ -1,0 +1,16 @@
+[project]
+name = "doctor-platform-api"
+version = "0.1.0"
+description = "Doctor Management Platform - FastAPI backend"
+requires-python = ">=3.12"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+exclude = [".venv", "migrations/versions"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
