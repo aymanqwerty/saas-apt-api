@@ -31,7 +31,3 @@ media/
 .gitignore
 .DS_Store
 Thumbs.db
-
-# Docker files themselves
-Dockerfile
-.dockerignore
