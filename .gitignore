@@ -26,6 +26,9 @@ env/
 .coverage
 htmlcov/
 
+# Cloud Run production secrets
+cloudrun.env.yaml
+
 # --- Uploaded / runtime media ---
 media/
 
