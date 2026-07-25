@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.exceptions import ApiException
+from app.core.phone import normalize_phone
 from app.core.security import create_access_token, hash_password, verify_password
 from app.models.doctor import Doctor, DoctorStatus
 from app.models.otp_challenge import OtpChallenge, OtpPurpose
@@ -35,6 +36,7 @@ class PatientAuthService:
     # ------------------------------------------------------------------ otp
     def request_otp(self, doctor_slug: str, phone_number: str) -> tuple[int, str | None]:
         doctor = self._require_doctor(doctor_slug)
+        phone_number = normalize_phone(phone_number)
 
         code = self._generate_code()
         now = datetime.now(UTC)
@@ -57,6 +59,7 @@ class PatientAuthService:
 
     def verify_otp(self, doctor_slug: str, phone_number: str, code: str) -> PatientAuthData:
         doctor = self._require_doctor(doctor_slug)
+        phone_number = normalize_phone(phone_number)
         now = datetime.now(UTC)
 
         challenge = self._otps.get_active(doctor.id, phone_number, now)
@@ -88,6 +91,7 @@ class PatientAuthService:
         self, doctor_slug: str, phone_number: str, password: str
     ) -> PatientAuthData:
         doctor = self._require_doctor(doctor_slug)
+        phone_number = normalize_phone(phone_number)
         account = self._accounts.get_by_phone(doctor.id, phone_number)
         if account is None or account.password_hash is None:
             raise ApiException(401, "Invalid phone number or password", "UNAUTHORIZED")
