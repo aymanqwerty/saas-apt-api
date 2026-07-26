@@ -2,7 +2,7 @@ from fastapi import APIRouter, Request, Response
 
 from app.core.config import settings
 from app.core.exceptions import ApiException
-from app.core.rate_limit import login_rate_limiter
+from app.core.rate_limit import get_client_ip, login_rate_limiter
 from app.dependencies.auth import CurrentDoctor
 from app.dependencies.database import DbSession
 from app.schemas.auth import LoginData, LoginRequest
@@ -29,7 +29,7 @@ def _set_auth_cookie(response: Response, token: str) -> None:
 def login(
     body: LoginRequest, request: Request, response: Response, db: DbSession
 ) -> ApiResponse[LoginData]:
-    client_host = request.client.host if request.client else "unknown"
+    client_host = get_client_ip(request)
     rate_key = f"{client_host}:{body.email.lower()}"
     if not login_rate_limiter.is_allowed(rate_key):
         raise ApiException(

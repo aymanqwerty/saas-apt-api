@@ -11,12 +11,13 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.exceptions import ApiException
+from app.core.phone import normalize_phone
 from app.models.appointment import Appointment, AppointmentStatus, BookingSource
 from app.models.appointment_hold import AppointmentHold, HoldStatus
 from app.models.booking_session import BookingSession, BookingSessionStatus
 from app.models.clinic import Clinic, ClinicStatus
 from app.models.doctor import Doctor, DoctorStatus
-from app.models.patient import Patient
+from app.models.patient import Patient, PatientRelationship
 from app.models.patient_account import PatientAccount
 from app.models.payment import Payment, PaymentStatus
 from app.models.slot import Slot, SlotStatus
@@ -539,10 +540,15 @@ class BookingService:
         self._send(
             phone,
             (
-                f"✅ Appointment confirmed with {doctor.full_name}.\n"
-                f"Clinic: {conf.clinic_name}\n"
-                f"Date: {conf.appointment_date}  Time: {conf.start_time.strftime('%H:%M')}\n"
-                f"Token: {conf.token_number}  Ref: {conf.appointment_number}"
+                f"🎉 *Appointment Confirmed!*\n\n"
+                f"Your appointment with *{doctor.full_name}* has been confirmed.\n\n"
+                f"🏥 Clinic: {conf.clinic_name}\n"
+                f"📅 Date: {conf.appointment_date}\n"
+                f"🕒 Time: {conf.start_time.strftime('%I:%M %p')}\n"
+                f"🎟️ Token Number: {conf.token_number}\n"
+                f"🆔 Appointment ID: {conf.appointment_number}\n\n"
+                f"Please arrive 10–15 minutes before your scheduled appointment time.\n"
+                f"Thank you, and we wish you good health! 😊"
             ),
         )
 
@@ -552,9 +558,17 @@ class BookingService:
         self._send(
             phone,
             (
-                f"Appointment with {doctor.full_name} at {clinic.clinic_name} on "
-                f"{slot.slot_date} at {slot.start_time.strftime('%H:%M')}.\n"
-                f"Pay Rs. {fee} within {settings.hold_expiry_minutes} minutes to confirm:\n{url}"
+                f"Hello! 😊\n\n"
+                f"Your appointment has been reserved with *{doctor.full_name}*.\n\n"
+                f"🏥 Clinic: {clinic.clinic_name}\n"
+                f"📅 Date: {slot.slot_date}\n"
+                f"🕒 Time: {slot.start_time.strftime('%I:%M %p')}\n"
+                f"💰 Consultation Fee: ₹{fee}\n\n"
+                f"To *confirm your appointment*, please complete the payment within "
+                f"{settings.hold_expiry_minutes} minutes.\n\n"
+                f"💳 Payment Link:\n{url}\n\n"
+                f"✅ Once your payment is successful, your appointment will be confirmed automatically.\n\n"
+                f"Thank you! We look forward to seeing you."
             ),
         )
 
@@ -648,6 +662,7 @@ class BookingService:
         """A logged-in patient booking for a manually-entered ("someone else") person."""
         # Save-for-next-time → a new family member (exempt from the primary-phone
         # rule, so it can even share the account phone).
+        phone = normalize_phone(data.phone_number)
         if data.save_as_member:
             member = Patient(
                 doctor_id=doctor.id,
@@ -655,7 +670,7 @@ class BookingService:
                 relationship=data.relationship or PatientRelationship.OTHER,
                 patient_code=self._patients.next_patient_code(doctor.id),
                 full_name=data.name,
-                phone_number=data.phone_number or account.phone_number,
+                phone_number=phone or account.phone_number,
                 email=data.email,
                 age=data.age,
                 gender=data.gender,
@@ -666,7 +681,7 @@ class BookingService:
         # One-off: match/create the primary patient for this phone and link it to
         # the booker's account so it shows in their history — but never re-home a
         # record that already belongs to a different account.
-        existing = self._patients.get_by_phone(doctor.id, data.phone_number)
+        existing = self._patients.get_by_phone(doctor.id, phone)
         if existing is not None:
             if existing.account_id in (None, account.id):
                 existing.account_id = account.id
@@ -687,7 +702,7 @@ class BookingService:
             account_id=account.id,
             patient_code=self._patients.next_patient_code(doctor.id),
             full_name=data.name,
-            phone_number=data.phone_number,
+            phone_number=phone,
             email=data.email,
             age=data.age,
             gender=data.gender,
@@ -697,14 +712,17 @@ class BookingService:
         except IntegrityError:
             # Concurrent booking created the same primary — reuse it.
             self._db.rollback()
-            existing = self._patients.get_by_phone(doctor.id, data.phone_number)
+            existing = self._patients.get_by_phone(doctor.id, phone)
             if existing is None:
                 raise
             return existing
         return patient
 
     def _match_or_create_patient(self, doctor: Doctor, data: BookingRequest) -> Patient:
-        existing = self._patients.get_by_phone(doctor.id, data.phone_number)
+        # Canonicalise the phone so the same person always maps to one record,
+        # regardless of how they typed it (matches patient-auth normalization).
+        phone = normalize_phone(data.phone_number)
+        existing = self._patients.get_by_phone(doctor.id, phone)
         if existing is not None:
             # Refresh details from the latest booking.
             existing.full_name = data.name
@@ -721,7 +739,7 @@ class BookingService:
             doctor_id=doctor.id,
             patient_code=self._patients.next_patient_code(doctor.id),
             full_name=data.name,
-            phone_number=data.phone_number,
+            phone_number=phone,
             email=data.email,
             age=data.age,
             gender=data.gender,
@@ -731,7 +749,7 @@ class BookingService:
         except IntegrityError:
             # Concurrent booking created the same patient first — reuse it.
             self._db.rollback()
-            existing = self._patients.get_by_phone(doctor.id, data.phone_number)
+            existing = self._patients.get_by_phone(doctor.id, phone)
             if existing is None:
                 raise
             return existing
@@ -745,26 +763,39 @@ class BookingService:
         patient: Patient,
         reason: str | None,
     ) -> Appointment:
-        appointment = Appointment(
-            doctor_id=doctor.id,
-            clinic_id=clinic.id,
-            patient_id=patient.id,
-            slot_id=slot.id,
-            appointment_number=self._unique_appointment_number(),
-            token_number=self._appointments.next_token_number(clinic.id, slot.slot_date),
-            appointment_status=AppointmentStatus.CONFIRMED,
-            booking_source=BookingSource.WEBSITE,
-            visit_reason=reason,
-            doctor_name=doctor.full_name,
-            clinic_name=clinic.clinic_name,
-            clinic_address=compose_clinic_address(clinic),
-            consultation_fee=clinic.consultation_fee,
-            appointment_date=slot.slot_date,
-            start_time=slot.start_time,
-            end_time=slot.end_time,
-        )
-        self._appointments.add(appointment)
-        return appointment
+        # `token_number` (MAX+1 per clinic-day) and `appointment_number` (random)
+        # both carry unique constraints. Under concurrency two bookings can pick
+        # the same value; the DB rejects the loser, so recompute and retry inside
+        # a SAVEPOINT to avoid tearing down the whole booking transaction.
+        last_error: IntegrityError | None = None
+        for _ in range(5):
+            appointment = Appointment(
+                doctor_id=doctor.id,
+                clinic_id=clinic.id,
+                patient_id=patient.id,
+                slot_id=slot.id,
+                appointment_number=self._unique_appointment_number(),
+                token_number=self._appointments.next_token_number(clinic.id, slot.slot_date),
+                appointment_status=AppointmentStatus.CONFIRMED,
+                booking_source=BookingSource.WEBSITE,
+                visit_reason=reason,
+                doctor_name=doctor.full_name,
+                clinic_name=clinic.clinic_name,
+                clinic_address=compose_clinic_address(clinic),
+                consultation_fee=clinic.consultation_fee,
+                appointment_date=slot.slot_date,
+                start_time=slot.start_time,
+                end_time=slot.end_time,
+            )
+            try:
+                with self._db.begin_nested():
+                    self._appointments.add(appointment)
+                return appointment
+            except IntegrityError as exc:
+                last_error = exc
+        raise ApiException(
+            500, "Could not allocate an appointment. Please try again.", "INTERNAL_ERROR"
+        ) from last_error
 
     def _unique_appointment_number(self) -> str:
         for _ in range(10):

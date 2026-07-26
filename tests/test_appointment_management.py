@@ -102,7 +102,8 @@ def test_list_and_get(context: dict) -> None:
     detail = client.get(
         f"/api/v1/appointments/{context['appointment_id']}", headers=context["headers"]
     ).json()["data"]
-    assert detail["patient_phone"] == "+91-8000000050"
+    # Phone is canonicalised on booking (country code / punctuation stripped).
+    assert detail["patient_phone"] == "8000000050"
 
 
 def test_invalid_status_transition_rejected(context: dict) -> None:

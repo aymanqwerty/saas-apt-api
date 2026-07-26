@@ -202,8 +202,8 @@ def test_family_members_crud(ctx: dict) -> None:
     assert add.status_code == 201, add.text
     member = add.json()["data"]
     assert member["relationship"] == "FATHER"
-    # No own phone given → inherits the account phone.
-    assert member["phone_number"] == phone
+    # No own phone given → inherits the account's (normalized) phone.
+    assert member["phone_number"] == "9100000004"
 
     members = client.get(f"{API}/patient-account/members", headers=_auth(token)).json()["data"]
     assert len(members) == 1

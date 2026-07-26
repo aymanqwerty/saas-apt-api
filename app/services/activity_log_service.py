@@ -3,6 +3,7 @@ import uuid
 from fastapi import Request
 from sqlalchemy.orm import Session
 
+from app.core.rate_limit import get_client_ip
 from app.models.activity_log import ActivityLog
 from app.repositories.activity_log_repository import ActivityLogRepository
 
@@ -29,7 +30,7 @@ class ActivityLogService:
                 entity=entity,
                 entity_id=entity_id,
                 description=description,
-                ip_address=request.client.host if request and request.client else None,
+                ip_address=get_client_ip(request) if request else None,
                 user_agent=request.headers.get("User-Agent") if request else None,
             )
         )

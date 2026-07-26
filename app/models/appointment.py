@@ -82,6 +82,14 @@ class Appointment(Base, TimestampMixin):
 
     __table_args__ = (
         UniqueConstraint("appointment_number", name="uq_appointments_appointment_number"),
+        # A queue token is unique within a clinic-day; enforces no duplicate token
+        # numbers under concurrent bookings (the service retries on collision).
+        UniqueConstraint(
+            "clinic_id",
+            "appointment_date",
+            "token_number",
+            name="uq_appointments_clinic_date_token",
+        ),
         Index("ix_appointments_doctor_id", "doctor_id"),
         Index("ix_appointments_clinic_id", "clinic_id"),
         Index("ix_appointments_patient_id", "patient_id"),

@@ -4,6 +4,7 @@ from datetime import date
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
+from app.core.phone import normalize_phone
 from app.models.appointment import Appointment
 from app.models.patient import Patient, PatientRelationship
 
@@ -71,11 +72,12 @@ class PatientRepository:
         """Return the *primary* patient for a phone (guest record or account holder).
 
         Family members share the account holder's phone but are never primary,
-        so guest bookings always resolve to the single primary record.
+        so guest bookings always resolve to the single primary record. The phone
+        is canonicalised so a lookup matches regardless of how it was typed.
         """
         stmt = select(Patient).where(
             Patient.doctor_id == doctor_id,
-            Patient.phone_number == phone_number,
+            Patient.phone_number == normalize_phone(phone_number),
             or_(
                 Patient.relationship.is_(None),
                 Patient.relationship == PatientRelationship.SELF,

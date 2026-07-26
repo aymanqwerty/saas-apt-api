@@ -1,6 +1,26 @@
 import time
 from threading import Lock
 
+from fastapi import Request
+
+
+def get_client_ip(request: Request | None) -> str:
+    """Best-effort real client IP.
+
+    Behind a proxy/load balancer (e.g. Cloud Run), `request.client.host` is the
+    proxy's address, so every caller would share one rate-limit bucket. Prefer
+    the left-most entry of `X-Forwarded-For` (the original client) when present,
+    falling back to the socket peer. Used only for rate limiting / audit logs.
+    """
+    if request is None:
+        return "unknown"
+    forwarded = request.headers.get("X-Forwarded-For")
+    if forwarded:
+        first = forwarded.split(",")[0].strip()
+        if first:
+            return first
+    return request.client.host if request.client else "unknown"
+
 
 class FixedWindowRateLimiter:
     """In-memory fixed-window rate limiter.

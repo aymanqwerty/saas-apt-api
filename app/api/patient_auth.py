@@ -2,7 +2,11 @@ from fastapi import APIRouter, Request, Response
 
 from app.core.config import settings
 from app.core.exceptions import ApiException
-from app.core.rate_limit import otp_request_rate_limiter, patient_login_rate_limiter
+from app.core.rate_limit import (
+    get_client_ip,
+    otp_request_rate_limiter,
+    patient_login_rate_limiter,
+)
 from app.dependencies.database import DbSession
 from app.dependencies.patient_auth import CurrentAccount
 from app.schemas.common import ApiResponse
@@ -33,8 +37,7 @@ def _set_patient_cookie(response: Response, token: str) -> None:
 
 
 def _client_key(request: Request, *parts: str) -> str:
-    host = request.client.host if request.client else "unknown"
-    return ":".join([host, *parts])
+    return ":".join([get_client_ip(request), *parts])
 
 
 @router.post("/request-otp", response_model=ApiResponse[RequestOtpResponse])

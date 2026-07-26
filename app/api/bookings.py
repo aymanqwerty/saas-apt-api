@@ -3,7 +3,7 @@ import uuid
 from fastapi import APIRouter, Request
 
 from app.core.exceptions import ApiException
-from app.core.rate_limit import booking_rate_limiter
+from app.core.rate_limit import booking_rate_limiter, get_client_ip
 from app.dependencies.database import DbSession
 from app.dependencies.patient_auth import OptionalAccount
 from app.schemas.booking import (
@@ -23,7 +23,7 @@ def start_booking(
     body: BookingRequest, request: Request, db: DbSession, account: OptionalAccount
 ) -> ApiResponse[BookingStartResponse]:
     # Public write endpoint — rate-limited per IP and per account/phone (docs/12 §4).
-    client_host = request.client.host if request.client else "unknown"
+    client_host = get_client_ip(request)
     rate_subject = str(account.id) if account is not None else body.phone_number
     if not booking_rate_limiter.is_allowed(f"{client_host}:{rate_subject}"):
         raise ApiException(

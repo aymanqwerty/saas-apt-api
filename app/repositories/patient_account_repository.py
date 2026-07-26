@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.phone import normalize_phone
 from app.models.patient_account import PatientAccount
 
 
@@ -17,7 +18,7 @@ class PatientAccountRepository:
     def get_by_phone(self, doctor_id: uuid.UUID, phone_number: str) -> PatientAccount | None:
         stmt = select(PatientAccount).where(
             PatientAccount.doctor_id == doctor_id,
-            PatientAccount.phone_number == phone_number,
+            PatientAccount.phone_number == normalize_phone(phone_number),
         )
         return self._db.scalar(stmt)
 

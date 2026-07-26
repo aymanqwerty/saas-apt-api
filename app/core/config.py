@@ -24,11 +24,20 @@ class Settings(BaseSettings):
     patient_access_token_expire_minutes: int = 60 * 24 * 30
 
     # Phone OTP for patient auth. The sender is swappable behind the OtpSender
-    # interface; "console" just logs the code (no SMS integration in dev).
+    # interface; "console" just logs the code (no SMS integration in dev),
+    # "msg91" delivers it as an SMS via the MSG91 gateway.
     otp_provider: str = "console"
     otp_length: int = 6
     otp_expiry_minutes: int = 5
     otp_max_attempts: int = 5
+
+    # MSG91 SMS gateway (used when otp_provider=msg91). We generate/verify the
+    # OTP ourselves; MSG91 only delivers the code through a DLT-approved template.
+    msg91_authkey: str = ""
+    msg91_sender_id: str = ""
+    msg91_otp_template_id: str = ""
+    # Prepended to a bare 10-digit number so MSG91 gets full international form.
+    msg91_default_country_code: str = "91"
 
     media_root: str = "media"
 

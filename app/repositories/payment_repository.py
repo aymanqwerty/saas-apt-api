@@ -1,4 +1,5 @@
 import uuid
+from datetime import date, timedelta
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -25,6 +26,8 @@ class PaymentRepository:
         status: PaymentStatus | None = None,
         clinic_id: uuid.UUID | None = None,
         search: str | None = None,
+        date_from: date | None = None,
+        date_to: date | None = None,
         page: int = 1,
         limit: int = 20,
     ) -> tuple[list[Payment], int]:
@@ -36,6 +39,11 @@ class PaymentRepository:
         if search:
             # Assuming search by patient_name
             filters.append(Payment.patient_name.ilike(f"%{search}%"))
+        if date_from:
+            filters.append(Payment.created_at >= date_from)
+        if date_to:
+            # created_at is a timestamp; add a day so the whole `date_to` is inclusive.
+            filters.append(Payment.created_at < date_to + timedelta(days=1))
 
         base = select(Payment).where(*filters)
         total = self._db.scalar(select(func.count()).select_from(base.subquery()))
