@@ -19,7 +19,7 @@ from app.repositories.patient_account_repository import PatientAccountRepository
 from app.repositories.patient_repository import PatientRepository
 from app.schemas.patient_account import PatientProfile
 from app.schemas.patient_auth import AccountSummary, MeResponse, PatientAuthData
-from app.services.otp import get_otp_sender
+from app.services.otp import OtpError, OtpSender, get_otp_sender
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +31,18 @@ class PatientAuthService:
         self._accounts = PatientAccountRepository(db)
         self._otps = OtpChallengeRepository(db)
         self._patients = PatientRepository(db)
-        self._sender = get_otp_sender()
+        self._sender_instance: OtpSender | None = None
+
+    @property
+    def _sender(self) -> OtpSender:
+        """Built on first use, not in __init__.
+
+        Only request_otp needs a sender; resolving it eagerly would let a
+        misconfigured SMS gateway break password login and /me as well.
+        """
+        if self._sender_instance is None:
+            self._sender_instance = get_otp_sender()
+        return self._sender_instance
 
     # ------------------------------------------------------------------ otp
     def request_otp(self, doctor_slug: str, phone_number: str) -> tuple[int, str | None]:
@@ -51,7 +62,19 @@ class PatientAuthService:
         )
         self._otps.add(challenge)
 
-        self._sender.send(phone_number, code, doctor_name=doctor.full_name)
+        # Send before commit: if delivery fails we roll the challenge back rather
+        # than leaving a code the patient can never receive but which still
+        # invalidates their previous one.
+        try:
+            self._sender.send(phone_number, code, doctor_name=doctor.full_name)
+        except OtpError as exc:
+            self._db.rollback()
+            logger.error("OTP delivery failed for doctor=%s: %s", doctor.id, exc)
+            raise ApiException(
+                502,
+                "We couldn't send the verification code right now. Please try again.",
+                "OTP_SEND_FAILED",
+            ) from exc
         self._db.commit()
 
         debug_code = code if settings.environment == "development" else None

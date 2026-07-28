@@ -35,7 +35,12 @@ class Settings(BaseSettings):
     # OTP ourselves; MSG91 only delivers the code through a DLT-approved template.
     msg91_authkey: str = ""
     msg91_sender_id: str = ""
+    # The MSG91 *flow* template id (24-char ObjectId) — see msg91_sender.py for
+    # why this goes to the flow API rather than the OTP API.
     msg91_otp_template_id: str = ""
+    # Name of the placeholder in that template (##var## -> "var"). Configurable
+    # because it is fixed by the DLT registration, which changes on re-approval.
+    msg91_otp_variable: str = "var"
     # Prepended to a bare 10-digit number so MSG91 gets full international form.
     msg91_default_country_code: str = "91"
 

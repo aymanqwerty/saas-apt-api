@@ -334,7 +334,9 @@ def test_guest_booking_ignores_foreign_doctor_session(ctx: dict) -> None:
             "effective_from": "2026-01-01",
         },
     )
-    slot_b = client.get(f"{API}/slots?clinic_id={clinic_b}", headers=b_headers).json()["data"]["items"][0]
+    _b_slots = client.get(f"{API}/slots?clinic_id={clinic_b}", headers=b_headers).json()["data"]["items"]
+    # Strictly future: today's earliest slot is already in the past on the rule's weekday.
+    slot_b = next(s for s in _b_slots if s["slot_date"] > _dt.date.today().isoformat())
 
     try:
         resp = client.post(
