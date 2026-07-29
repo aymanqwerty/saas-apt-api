@@ -11,8 +11,17 @@ email-validator>=2.2
 python-multipart>=0.0.12
 apscheduler>=3.10
 razorpay>=1.4
+# Runtime, not dev: the MSG91 OTP sender, both WhatsApp notifiers and the
+# ElevenLabs token service all call httpx. It only looked optional because
+# pytest happened to pull it in.
+httpx>=0.27
+# Media storage on GCS (MEDIA_STORAGE_PROVIDER=gcs). Imported lazily, so a
+# local-only install still works if this is absent.
+google-cloud-storage>=2.18
+# HTML sanitiser for doctor-authored blog content. Imported at module scope in
+# app/utils/sanitize.py, so the API will NOT start without it.
+nh3>=0.2
 
 # Development / testing
 pytest>=8.2
-httpx>=0.27
 ruff>=0.5

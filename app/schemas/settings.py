@@ -1,4 +1,7 @@
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
+
+# Shown when the doctor hasn't chosen their own wording.
+DEFAULT_SECTION_LABEL = "Success Stories"
 
 
 class SettingsResponse(BaseModel):
@@ -9,6 +12,7 @@ class SettingsResponse(BaseModel):
     show_consultation_fee: bool
     show_contact_information: bool
     payment_required: bool
+    section_label: str | None = None
 
 
 class SettingsUpdate(BaseModel):
@@ -17,6 +21,7 @@ class SettingsUpdate(BaseModel):
     show_consultation_fee: bool | None = None
     show_contact_information: bool | None = None
     payment_required: bool | None = None
+    section_label: str | None = Field(default=None, max_length=50)
 
 
 class PublicSettings(BaseModel):
@@ -27,3 +32,6 @@ class PublicSettings(BaseModel):
     show_consultation_fee: bool
     show_contact_information: bool
     payment_required: bool = False
+    # Always resolved to a usable string for the public site, so the frontend
+    # never has to decide on a fallback.
+    section_label: str = DEFAULT_SECTION_LABEL

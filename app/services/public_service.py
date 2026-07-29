@@ -8,16 +8,18 @@ from app.models.clinic import Clinic, ClinicStatus
 from app.models.doctor import Doctor, DoctorStatus
 from app.models.doctor_settings import DoctorSettings
 from app.models.gallery_post import GalleryPost
+from app.repositories.blog_category_repository import BlogCategoryRepository
 from app.repositories.clinic_repository import ClinicRepository
 from app.repositories.doctor_repository import DoctorRepository
 from app.repositories.gallery_repository import GalleryRepository
 from app.repositories.service_repository import ServiceRepository
 from app.repositories.settings_repository import SettingsRepository
 from app.repositories.slot_repository import SlotRepository
-from app.schemas.gallery import PublicGalleryItem
+from app.schemas.gallery import PublicBlogCategory, PublicGalleryItem
+from app.schemas.pagination import Page
 from app.schemas.public import PublicClinic, PublicDoctor, PublicSite, PublicSlot
 from app.schemas.public import PublicService as PublicServiceSchema
-from app.schemas.settings import PublicSettings
+from app.schemas.settings import DEFAULT_SECTION_LABEL, PublicSettings
 
 # Defaults when a doctor has no settings row yet (all features on).
 _DEFAULT_SETTINGS = PublicSettings(
@@ -29,7 +31,10 @@ _DEFAULT_SETTINGS = PublicSettings(
 )
 
 
-def _thumbnail(post: GalleryPost) -> str | None:
+def _cover_image(post: GalleryPost) -> str | None:
+    """Explicit cover, else fall back to the first image in the post."""
+    if post.cover_image:
+        return post.cover_image
     for item in post.media or []:
         if isinstance(item, dict) and item.get("type") == "image":
             return item.get("url")
@@ -37,14 +42,9 @@ def _thumbnail(post: GalleryPost) -> str | None:
 
 
 def _gallery_item(post: GalleryPost) -> PublicGalleryItem:
-    return PublicGalleryItem(
-        id=post.id,
-        title=post.title,
-        slug=post.slug,
-        category=post.category,
-        thumbnail=_thumbnail(post),
-        published_at=post.published_at,
-    )
+    item = PublicGalleryItem.from_post(post)
+    item.cover_image = _cover_image(post)
+    return item
 
 
 def _public_clinic(clinic: Clinic, settings: PublicSettings) -> PublicClinic:
@@ -72,6 +72,7 @@ class PublicService:
         self._clinics = ClinicRepository(db)
         self._services = ServiceRepository(db)
         self._gallery = GalleryRepository(db)
+        self._categories = BlogCategoryRepository(db)
         self._settings = SettingsRepository(db)
         self._slots = SlotRepository(db)
 
@@ -91,6 +92,9 @@ class PublicService:
             show_consultation_fee=row.show_consultation_fee,
             show_contact_information=row.show_contact_information,
             payment_required=row.payment_required,
+            # Resolve the fallback here so the public site never renders an
+            # empty heading if the doctor clears the field.
+            section_label=(row.section_label or "").strip() or DEFAULT_SECTION_LABEL,
         )
 
     def get_public_settings(self, slug: str) -> PublicSettings:
@@ -112,7 +116,7 @@ class PublicService:
         clinics = self._clinics.list_for_doctor(doctor.id, status=ClinicStatus.ACTIVE)
         services = self._services.list_active_for_doctor(doctor.id)
         gallery = (
-            [_gallery_item(p) for p in self._gallery.list_published(doctor.id)[:6]]
+            [_gallery_item(p) for p in self._gallery.list_published(doctor.id, limit=6)]
             if settings.gallery_enabled
             else []
         )
@@ -127,11 +131,33 @@ class PublicService:
         doctor = self._require_active_doctor(slug)
         return self._services.list_active_for_doctor(doctor.id)
 
-    def list_gallery(self, slug: str) -> list[PublicGalleryItem]:
+    def list_gallery(
+        self,
+        slug: str,
+        *,
+        category: str | None = None,
+        page: int = 1,
+        limit: int = 12,
+    ) -> Page[PublicGalleryItem]:
         doctor = self._require_active_doctor(slug)
         if not self._settings_for(doctor.id).gallery_enabled:
-            raise ApiException(404, "Gallery is not available", "NOT_FOUND")
-        return [_gallery_item(p) for p in self._gallery.list_published(doctor.id)]
+            raise ApiException(404, "This section is not available", "NOT_FOUND")
+        posts, total = self._gallery.list_published_page(
+            doctor.id, category_slug=category, page=page, limit=limit
+        )
+        return Page.build([_gallery_item(p) for p in posts], total, page, limit)
+
+    def list_gallery_categories(self, slug: str) -> list[PublicBlogCategory]:
+        """Categories that actually have published posts — empty chips are noise."""
+        doctor = self._require_active_doctor(slug)
+        if not self._settings_for(doctor.id).gallery_enabled:
+            raise ApiException(404, "This section is not available", "NOT_FOUND")
+        counts = self._categories.published_counts(doctor.id)
+        return [
+            PublicBlogCategory(name=c.name, slug=c.slug, post_count=counts.get(c.id, 0))
+            for c in self._categories.list_for_doctor(doctor.id)
+            if counts.get(c.id, 0) > 0
+        ]
 
     def get_gallery_post(self, slug: str, post_slug: str) -> GalleryPost:
         doctor = self._require_active_doctor(slug)

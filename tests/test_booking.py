@@ -152,3 +152,37 @@ def test_duplicate_same_patient_rejected(booking_context: dict) -> None:
     duplicate = client.post("/api/v1/public/bookings", json=body)
     assert duplicate.status_code == 409
     assert duplicate.json()["error_code"] == "DUPLICATE_BOOKING"
+
+
+def test_website_booking_sends_confirmation(booking_context: dict, monkeypatch) -> None:
+    """A free website booking must notify the patient, exactly as an agent booking does.
+
+    This path created the appointment and returned silently until 2026-07-28, so
+    only voice-agent bookings ever produced a WhatsApp confirmation.
+    """
+    sent: list = []
+
+    class _Recorder:
+        name = "recorder"
+
+        def send(self, to_phone, message, *, channel="whatsapp"):
+            sent.append((to_phone, message))
+
+    monkeypatch.setattr("app.services.booking_service.get_notifier", lambda: _Recorder())
+
+    slot = booking_context["slots"][2]
+    body = _booking_body(booking_context, slot["id"], "+91-8000000030")
+    response = client.post("/api/v1/public/bookings", json=body)
+    assert response.status_code == 201, response.text
+    assert response.json()["data"]["status"] == "confirmed"
+
+    assert len(sent) == 1, "expected exactly one confirmation"
+    to_phone, message = sent[0]
+    # Stored normalised (bare local); the notifier re-adds the country code.
+    assert to_phone == "8000000030"
+    assert message.template == "appointment_confirmed"
+    # Six positional values, in the order the approved template expects.
+    assert len(message.variables) == 6
+    assert message.variables[0] == "Booking Doctor"
+    assert message.variables[1] == "Book Clinic"
+    assert message.variables[5] == response.json()["data"]["appointment"]["appointment_number"]

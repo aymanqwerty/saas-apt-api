@@ -10,6 +10,7 @@ from app.api.dashboard import router as dashboard_router
 from app.api.doctors import router as doctors_router
 from app.api.gallery import router as gallery_router
 from app.api.health import router as health_router
+from app.api.internal import router as internal_router
 from app.api.media import router as media_router
 from app.api.patient_account import router as patient_account_router
 from app.api.patient_auth import router as patient_auth_router
@@ -42,3 +43,4 @@ api_router.include_router(settings_router, tags=["settings"])
 api_router.include_router(dashboard_router, tags=["dashboard"])
 api_router.include_router(agent_router, tags=["agent"])
 api_router.include_router(webhooks_router, tags=["webhooks"])
+api_router.include_router(internal_router)

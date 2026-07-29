@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from app.models.otp_challenge import OtpChallenge
@@ -39,6 +39,26 @@ class OtpChallengeRepository:
                 OtpChallenge.consumed_at.is_(None),
             )
             .values(consumed_at=now)
+        )
+
+    def count_for_phone_since(self, phone_number: str, since: datetime) -> int:
+        """How many codes we have sent to this number since `since`.
+
+        Deliberately NOT scoped to a doctor: the thing being protected is the
+        handset (and our SMS spend), so someone cycling through doctor slugs
+        must not get a fresh allowance each time. Database-backed rather than
+        in-memory so the cap holds across instances.
+        """
+        return (
+            self._db.scalar(
+                select(func.count())
+                .select_from(OtpChallenge)
+                .where(
+                    OtpChallenge.phone_number == phone_number,
+                    OtpChallenge.created_at > since,
+                )
+            )
+            or 0
         )
 
     def add(self, challenge: OtpChallenge) -> None:

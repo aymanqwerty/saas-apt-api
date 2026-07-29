@@ -30,6 +30,12 @@ class Settings(BaseSettings):
     otp_length: int = 6
     otp_expiry_minutes: int = 5
     otp_max_attempts: int = 5
+    # Per-PHONE send caps, enforced in the database so they hold across
+    # instances and cannot be reset by rotating IPs. This is what protects the
+    # SMS bill and stops a victim's handset being bombed; the IP-keyed limiter
+    # in the router is a separate, weaker first line.
+    otp_max_per_phone_hour: int = 5
+    otp_max_per_phone_day: int = 15
 
     # MSG91 SMS gateway (used when otp_provider=msg91). We generate/verify the
     # OTP ourselves; MSG91 only delivers the code through a DLT-approved template.
@@ -44,7 +50,22 @@ class Settings(BaseSettings):
     # Prepended to a bare 10-digit number so MSG91 gets full international form.
     msg91_default_country_code: str = "91"
 
+    # Media storage behind the MediaStorage interface. "local" writes to disk
+    # (dev only — Cloud Run's filesystem is ephemeral and per-instance, so
+    # uploads are lost on every deploy); "gcs" writes to a public bucket.
+    media_storage_provider: str = "local"
     media_root: str = "media"
+    gcs_bucket: str = ""
+    # Optional CDN/custom domain in front of the bucket. Empty = serve from
+    # storage.googleapis.com directly.
+    gcs_public_base_url: str = ""
+
+    # In-process APScheduler. Must stay FALSE on Cloud Run (frozen CPU between
+    # requests, N instances racing the daily job) — drive /internal/jobs/*
+    # from Cloud Scheduler there instead.
+    scheduler_enabled: bool = True
+    # Shared secret for /internal/jobs/*. Empty disables those endpoints.
+    internal_job_token: str = ""
 
     # Payments. The provider is swappable behind the PaymentProvider interface;
     # `payment_provider` selects the implementation (only "razorpay" today).
@@ -57,8 +78,23 @@ class Settings(BaseSettings):
     razorpay_webhook_secret: str = ""
 
     # Notifications (WhatsApp/SMS) behind the Notifier interface; "console" logs,
-    # "whatsapp" sends via the Meta WhatsApp Cloud API.
+    # "whatsapp" sends free-form via the Meta WhatsApp Cloud API, and
+    # "msg91_whatsapp" sends approved templates via MSG91's WABA API (the only
+    # option that reaches patients outside the 24-hour window).
     notification_provider: str = "console"
+
+    # MSG91 WhatsApp (WABA). A SEPARATE MSG91 account from the SMS/OTP one, so
+    # it carries its own authkey — msg91_authkey above is not interchangeable.
+    msg91_wa_authkey: str = ""
+    msg91_wa_integrated_number: str = ""
+    msg91_wa_namespace: str = ""
+    msg91_wa_language: str = "en"
+    msg91_wa_default_country_code: str = "91"
+    # Approved template names, keyed by our logical template ids. Defaults match
+    # the names registered in MSG91; override per-environment if they diverge.
+    msg91_wa_template_appointment_confirmed: str = "appointment_confirmed"
+    msg91_wa_template_payment_link: str = "payment_link"
+    msg91_wa_template_review_link: str = "review_link"
     # Meta WhatsApp Cloud API (Meta for Developers). Fill these to send real
     # messages and set notification_provider=whatsapp.
     whatsapp_phone_number_id: str = ""

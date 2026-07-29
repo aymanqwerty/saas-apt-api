@@ -1,8 +1,12 @@
+import logging
+
 from fastapi import FastAPI, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
+
+logger = logging.getLogger(__name__)
 
 STATUS_ERROR_CODES = {
     400: "VALIDATION_ERROR",
@@ -60,4 +64,21 @@ def register_exception_handlers(app: FastAPI) -> None:
         return JSONResponse(
             status_code=exc.status_code,
             content=_error_body(str(exc.detail), error_code),
+        )
+
+    @app.exception_handler(Exception)
+    async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+        """Last resort so a 500 still honours the response envelope.
+
+        Without this, Starlette returns plain-text "Internal Server Error" and
+        both frontends — which call response.json() unconditionally — raise a
+        SyntaxError instead of surfacing an ApiError. The exception detail is
+        logged, never returned: it can carry connection strings and PII.
+        """
+        logger.exception("Unhandled error on %s %s", request.method, request.url.path)
+        return JSONResponse(
+            status_code=500,
+            content=_error_body(
+                "Something went wrong on our end. Please try again.", "INTERNAL_ERROR"
+            ),
         )

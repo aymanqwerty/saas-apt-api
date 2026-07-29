@@ -49,8 +49,10 @@ class PatientAuthService:
         doctor = self._require_doctor(doctor_slug)
         phone_number = normalize_phone(phone_number)
 
-        code = self._generate_code()
         now = datetime.now(UTC)
+        self._assert_phone_quota(phone_number, now)
+
+        code = self._generate_code()
         self._otps.invalidate_active(doctor.id, phone_number, now)
         challenge = OtpChallenge(
             doctor_id=doctor.id,
@@ -79,6 +81,35 @@ class PatientAuthService:
 
         debug_code = code if settings.environment == "development" else None
         return settings.otp_expiry_minutes * 60, debug_code
+
+    def _assert_phone_quota(self, phone_number: str, now: datetime) -> None:
+        """Cap OTPs per handset per hour/day, independent of IP or doctor.
+
+        The router's limiter is keyed on IP, which an attacker rotates trivially
+        — that makes unlimited SMS to a victim's number possible and bills us
+        for every one. These counts come from otp_challenges, so they survive
+        restarts and apply across every running instance.
+        """
+        for window, limit, label in (
+            (timedelta(hours=1), settings.otp_max_per_phone_hour, "hour"),
+            (timedelta(days=1), settings.otp_max_per_phone_day, "day"),
+        ):
+            if limit <= 0:
+                continue
+            sent = self._otps.count_for_phone_since(phone_number, now - window)
+            if sent >= limit:
+                logger.warning(
+                    "OTP quota exceeded for phone ending %s (%s per %s)",
+                    phone_number[-4:],
+                    limit,
+                    label,
+                )
+                raise ApiException(
+                    429,
+                    "Too many verification codes requested for this number. "
+                    "Please try again later.",
+                    "OTP_QUOTA_EXCEEDED",
+                )
 
     def verify_otp(self, doctor_slug: str, phone_number: str, code: str) -> PatientAuthData:
         doctor = self._require_doctor(doctor_slug)

@@ -13,7 +13,7 @@ text works. Template support can be added here later without touching callers.
 
 import logging
 
-from app.services.notifications.base import NotificationError
+from app.services.notifications.base import Message, NotificationError
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +47,7 @@ class WhatsAppNotifier:
         self._api_version = api_version
         self._default_country_code = default_country_code
 
-    def send(self, to_phone: str, message: str, *, channel: str = "whatsapp") -> None:
+    def send(self, to_phone: str, message: Message, *, channel: str = "whatsapp") -> None:
         if not self._phone_number_id or not self._access_token:
             raise NotificationError("WhatsApp credentials are not configured")
 
@@ -60,7 +60,7 @@ class WhatsAppNotifier:
             "recipient_type": "individual",
             "to": recipient,
             "type": "text",
-            "text": {"preview_url": True, "body": message},
+            "text": {"preview_url": True, "body": message.text},
         }
         headers = {
             "Authorization": f"Bearer {self._access_token}",

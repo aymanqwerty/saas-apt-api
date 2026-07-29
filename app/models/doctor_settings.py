@@ -33,6 +33,10 @@ class DoctorSettings(Base, TimestampMixin):
     payment_required: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default=text("false")
     )
+    # Public heading/nav label for the blog section — the doctor may call it
+    # "Success Stories", "Achievements", "Operations", etc. Display-only: the
+    # URL segment stays fixed so renaming never breaks shared links.
+    section_label: Mapped[str | None] = mapped_column(String(50))
     theme_color: Mapped[str | None] = mapped_column(String(20))
     custom_domain: Mapped[str | None] = mapped_column(String(255))
 

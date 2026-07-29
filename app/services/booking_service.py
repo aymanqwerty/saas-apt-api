@@ -39,7 +39,13 @@ from app.schemas.booking import (
     PaymentOrderInfo,
 )
 from app.services.activity_log_service import ActivityLogService
-from app.services.notifications import get_notifier
+from app.services.notifications import (
+    TEMPLATE_APPOINTMENT_CONFIRMED,
+    TEMPLATE_PAYMENT_LINK,
+    TEMPLATE_REVIEW_LINK,
+    Message,
+    get_notifier,
+)
 from app.services.payments import PaymentError, PaymentProvider, get_payment_provider
 from app.utils.address import compose_clinic_address
 
@@ -51,6 +57,16 @@ _APPOINTMENT_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
 def _generate_appointment_number() -> str:
     suffix = "".join(secrets.choice(_APPOINTMENT_ALPHABET) for _ in range(8))
     return f"APT-{suffix}"
+
+
+# Opportunistic hold expiry. On Cloud Run the process is frozen between
+# requests and scales to zero, so the in-process interval job cannot be relied
+# on: with no traffic, abandoned checkouts hold their seat forever. Traffic is
+# the only dependable clock, so we sweep on the way into a booking. Throttled
+# per process because it is a whole-table scan, and the freshness that matters
+# is "before we check capacity", not "every second".
+_last_hold_sweep: datetime | None = None
+_HOLD_SWEEP_INTERVAL = timedelta(seconds=60)
 
 
 class BookingService:
@@ -85,6 +101,10 @@ class BookingService:
         patient books for a saved profile (self or family member); guests supply
         their details inline exactly as before.
         """
+        # Release abandoned seats before we look at capacity, so a stale hold
+        # cannot make an actually-free slot look full.
+        self.sweep_stale_holds_opportunistically()
+
         doctor = self._doctors.get_by_slug(data.doctor_slug)
         if doctor is None:
             raise ApiException(404, "Doctor not found", "NOT_FOUND")
@@ -130,10 +150,10 @@ class BookingService:
             self._db.commit()
             self._db.refresh(appointment)
             logger.info("Appointment booked (free): %s", appointment.id)
-            return BookingStartResponse(
-                status="confirmed",
-                appointment=BookingConfirmation.model_validate(appointment),
-            )
+            conf = BookingConfirmation.model_validate(appointment)
+            # Website bookings get the same confirmation the agent already sends.
+            self._notify_confirmation(patient.phone_number, doctor, conf)
+            return BookingStartResponse(status="confirmed", appointment=conf)
 
         # Paid path: create the hold, then the gateway order. If the gateway call
         # fails, the whole transaction (incl. the seat claim) is rolled back.
@@ -263,7 +283,11 @@ class BookingService:
         self._db.commit()
         self._db.refresh(appointment)
         logger.info("Appointment booked (paid): %s", appointment.id)
-        return BookingConfirmation.model_validate(appointment)
+        conf = BookingConfirmation.model_validate(appointment)
+        # Sent only on the transition into CONFIRMED; the idempotent early
+        # return above deliberately does NOT re-notify on a repeated confirm.
+        self._notify_confirmation(patient.phone_number, doctor, conf)
+        return conf
 
     # ---------------------------------------------------------------- release
     def release_booking(self, hold_id) -> None:
@@ -275,6 +299,24 @@ class BookingService:
         self._release_hold(hold, payment, HoldStatus.CANCELLED, "abandoned by patient")
         self._db.commit()
         logger.info("Hold released by patient: %s", hold.id)
+
+    def sweep_stale_holds_opportunistically(self) -> None:
+        """Best-effort expiry driven by traffic rather than by a timer.
+
+        Never raises: a failed sweep must not block the booking that triggered
+        it. The scheduled job (and the internal jobs endpoint) remain the
+        authoritative sweep for the no-traffic case.
+        """
+        global _last_hold_sweep
+        now = datetime.now(UTC)
+        if _last_hold_sweep is not None and now - _last_hold_sweep < _HOLD_SWEEP_INTERVAL:
+            return
+        _last_hold_sweep = now
+        try:
+            self.expire_stale_holds()
+        except Exception:
+            self._db.rollback()
+            logger.exception("Opportunistic hold sweep failed")
 
     def expire_stale_holds(self) -> int:
         """Release every HELD hold whose deadline has passed. Runs on a timer."""
@@ -527,7 +569,7 @@ class BookingService:
         return f"{base}{path}" if base else path
 
     # --- notification message builders ---------------------------------------
-    def _send(self, phone: str, message: str) -> None:
+    def _send(self, phone: str, message: Message) -> None:
         """Send a notification best-effort — a delivery failure never breaks booking."""
         try:
             self._notifier.send(phone, message)
@@ -537,49 +579,91 @@ class BookingService:
     def _notify_confirmation(
         self, phone: str, doctor: Doctor, conf: BookingConfirmation
     ) -> None:
+        # Variable order is contractual: it fills {{1}}..{{6}} of the approved
+        # `appointment_confirmed` WhatsApp template. Changing the order here
+        # silently reorders the patient's message — keep it in sync with `text`.
+        variables = (
+            doctor.full_name,
+            conf.clinic_name,
+            str(conf.appointment_date),
+            conf.start_time.strftime("%I:%M %p"),
+            str(conf.token_number),
+            conf.appointment_number,
+        )
         self._send(
             phone,
-            (
-                f"🎉 *Appointment Confirmed!*\n\n"
-                f"Your appointment with *{doctor.full_name}* has been confirmed.\n\n"
-                f"🏥 Clinic: {conf.clinic_name}\n"
-                f"📅 Date: {conf.appointment_date}\n"
-                f"🕒 Time: {conf.start_time.strftime('%I:%M %p')}\n"
-                f"🎟️ Token Number: {conf.token_number}\n"
-                f"🆔 Appointment ID: {conf.appointment_number}\n\n"
-                f"Please arrive 10–15 minutes before your scheduled appointment time.\n"
-                f"Thank you, and we wish you good health! 😊"
+            Message(
+                template=TEMPLATE_APPOINTMENT_CONFIRMED,
+                variables=variables,
+                text=(
+                    f"🎉 *Appointment Confirmed!*\n\n"
+                    f"Your appointment with *{variables[0]}* has been confirmed.\n\n"
+                    f"🏥 Clinic: {variables[1]}\n"
+                    f"📅 Date: {variables[2]}\n"
+                    f"🕒 Time: {variables[3]}\n"
+                    f"🎟️ Token Number: {variables[4]}\n"
+                    f"🆔 Appointment ID: {variables[5]}\n\n"
+                    f"Please arrive 10–15 minutes before your scheduled appointment time.\n"
+                    f"Thank you, and we wish you good health! 😊"
+                ),
             ),
         )
 
     def _notify_pay_link(
         self, phone: str, doctor: Doctor, clinic: Clinic, slot: Slot, fee, url: str
     ) -> None:
+        # Fills {{1}}..{{7}} of the approved `payment_link` template.
+        variables = (
+            doctor.full_name,
+            clinic.clinic_name,
+            str(slot.slot_date),
+            slot.start_time.strftime("%I:%M %p"),
+            str(fee),
+            str(settings.hold_expiry_minutes),
+            url,
+        )
         self._send(
             phone,
-            (
-                f"Hello! 😊\n\n"
-                f"Your appointment has been reserved with *{doctor.full_name}*.\n\n"
-                f"🏥 Clinic: {clinic.clinic_name}\n"
-                f"📅 Date: {slot.slot_date}\n"
-                f"🕒 Time: {slot.start_time.strftime('%I:%M %p')}\n"
-                f"💰 Consultation Fee: ₹{fee}\n\n"
-                f"To *confirm your appointment*, please complete the payment within "
-                f"{settings.hold_expiry_minutes} minutes.\n\n"
-                f"💳 Payment Link:\n{url}\n\n"
-                f"✅ Once your payment is successful, your appointment will be confirmed automatically.\n\n"
-                f"Thank you! We look forward to seeing you."
+            Message(
+                template=TEMPLATE_PAYMENT_LINK,
+                variables=variables,
+                text=(
+                    f"Hello! 😊\n\n"
+                    f"Your appointment has been reserved with *{variables[0]}*.\n\n"
+                    f"🏥 Clinic: {variables[1]}\n"
+                    f"📅 Date: {variables[2]}\n"
+                    f"🕒 Time: {variables[3]}\n"
+                    f"💰 Consultation Fee: ₹{variables[4]}\n\n"
+                    f"To *confirm your appointment*, please complete the payment within "
+                    f"{variables[5]} minutes.\n\n"
+                    f"💳 Payment Link:\n{variables[6]}\n\n"
+                    f"✅ Once your payment is successful, your appointment will be "
+                    f"confirmed automatically.\n\n"
+                    f"Thank you! We look forward to seeing you."
+                ),
             ),
         )
 
     def _notify_review_link(
         self, phone: str, doctor: Doctor, clinic: Clinic, slot: Slot, url: str
     ) -> None:
+        # Fills {{1}}..{{5}} of the approved `review_link` template.
+        variables = (
+            doctor.full_name,
+            clinic.clinic_name,
+            str(slot.slot_date),
+            slot.start_time.strftime("%H:%M"),
+            url,
+        )
         self._send(
             phone,
-            (
-                f"Review your appointment with {doctor.full_name} at {clinic.clinic_name} on "
-                f"{slot.slot_date} at {slot.start_time.strftime('%H:%M')} and confirm here:\n{url}"
+            Message(
+                template=TEMPLATE_REVIEW_LINK,
+                variables=variables,
+                text=(
+                    f"Review your appointment with {variables[0]} at {variables[1]} on "
+                    f"{variables[2]} at {variables[3]} and confirm here:\n{variables[4]}"
+                ),
             ),
         )
 

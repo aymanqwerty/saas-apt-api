@@ -15,7 +15,12 @@ from app.core.scheduler import shutdown_scheduler, start_scheduler
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    start_scheduler()
+    # Off by default on Cloud Run: the CPU is frozen between requests so the
+    # interval job cannot be relied on, and every instance would run the daily
+    # job concurrently. Use SCHEDULER_ENABLED=true only on an always-on host;
+    # otherwise drive /internal/jobs/* from Cloud Scheduler.
+    if settings.scheduler_enabled:
+        start_scheduler()
     try:
         yield
     finally:

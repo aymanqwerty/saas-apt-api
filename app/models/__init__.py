@@ -7,6 +7,7 @@ from app.models.availability_rule import (
     AvailabilityRuleStatus,
     Weekday,
 )
+from app.models.blog_category import BlogCategory
 from app.models.booking_session import BookingSession, BookingSessionStatus
 from app.models.clinic import Clinic, ClinicStatus
 from app.models.doctor import Doctor, DoctorStatus
@@ -27,6 +28,7 @@ __all__ = [
     "AvailabilityException",
     "AvailabilityRule",
     "AvailabilityRuleStatus",
+    "BlogCategory",
     "BookingSession",
     "BookingSessionStatus",
     "BookingSource",

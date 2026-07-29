@@ -1,12 +1,13 @@
 import uuid
 from datetime import date
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 
 from app.dependencies.database import DbSession
 from app.schemas.booking_session import BookingSessionPublic
 from app.schemas.common import ApiResponse
-from app.schemas.gallery import PublicGalleryDetail, PublicGalleryItem
+from app.schemas.gallery import PublicBlogCategory, PublicGalleryDetail, PublicGalleryItem
+from app.schemas.pagination import Page
 from app.schemas.public import PublicDoctorProfile, PublicSite, PublicSlot
 from app.schemas.public import PublicService as PublicServiceSchema
 from app.schemas.settings import PublicSettings
@@ -49,10 +50,29 @@ def get_public_settings(slug: str, db: DbSession) -> ApiResponse[PublicSettings]
 
 @router.get(
     "/doctors/public/{slug}/gallery",
-    response_model=ApiResponse[list[PublicGalleryItem]],
+    response_model=ApiResponse[Page[PublicGalleryItem]],
 )
-def get_public_gallery(slug: str, db: DbSession) -> ApiResponse[list[PublicGalleryItem]]:
-    return ApiResponse(data=PublicService(db).list_gallery(slug))
+def get_public_gallery(
+    slug: str,
+    db: DbSession,
+    category: str | None = None,
+    page: int = Query(default=1, ge=1),
+    limit: int = Query(default=12, ge=1, le=50),
+) -> ApiResponse[Page[PublicGalleryItem]]:
+    return ApiResponse(
+        data=PublicService(db).list_gallery(slug, category=category, page=page, limit=limit)
+    )
+
+
+# Declared before /{post_slug} so "categories" isn't matched as a post slug.
+@router.get(
+    "/doctors/public/{slug}/gallery/categories",
+    response_model=ApiResponse[list[PublicBlogCategory]],
+)
+def get_public_gallery_categories(
+    slug: str, db: DbSession
+) -> ApiResponse[list[PublicBlogCategory]]:
+    return ApiResponse(data=PublicService(db).list_gallery_categories(slug))
 
 
 @router.get(
@@ -63,7 +83,7 @@ def get_public_gallery_post(
     slug: str, post_slug: str, db: DbSession
 ) -> ApiResponse[PublicGalleryDetail]:
     post = PublicService(db).get_gallery_post(slug, post_slug)
-    return ApiResponse(data=PublicGalleryDetail.model_validate(post))
+    return ApiResponse(data=PublicGalleryDetail.from_post(post))
 
 
 @router.get(
