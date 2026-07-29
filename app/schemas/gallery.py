@@ -9,7 +9,8 @@ from app.utils.instagram import instagram_embed
 from app.utils.sanitize import strip_html
 from app.utils.youtube import youtube_video_id
 
-MediaType = Literal["image", "youtube", "instagram"]
+# "video" is a file we host ourselves; "youtube"/"instagram" are embeds.
+MediaType = Literal["image", "video", "youtube", "instagram"]
 
 
 def _require_web_url(value: str) -> str:

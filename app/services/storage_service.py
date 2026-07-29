@@ -29,6 +29,18 @@ ALLOWED_CONTENT_TYPES = {
 }
 MAX_UPLOAD_BYTES = 5 * 1024 * 1024
 
+# Deliberately narrow. Browsers only play these reliably, and we do no
+# transcoding — a phone's H.265 .mov would upload happily and then fail to
+# play in Chrome, which is worse than refusing it up front.
+ALLOWED_VIDEO_TYPES = {
+    "video/mp4": ".mp4",
+    "video/webm": ".webm",
+}
+# Cloud Run caps request bodies at 32 MB on its default path, so the ceiling
+# has to sit safely under that. Larger videos would need a signed upload
+# straight to the bucket, bypassing the API entirely.
+MAX_VIDEO_BYTES = 25 * 1024 * 1024
+
 # Magic-byte signatures, checked against the client-declared content type. The
 # browser controls Content-Type, so on its own it decides nothing about what is
 # actually in the file.
@@ -36,6 +48,7 @@ _MAGIC_SIGNATURES: dict[str, tuple[bytes, ...]] = {
     ".jpg": (b"\xff\xd8\xff",),
     ".png": (b"\x89PNG\r\n\x1a\n",),
     ".webp": (b"RIFF",),
+    ".webm": (b"\x1a\x45\xdf\xa3",),
 }
 
 
@@ -50,6 +63,15 @@ class MediaStorage(Protocol):
     def save_image(self, owner_id: str, upload: UploadFile) -> str:
         """Persist `upload` and return the URL it will be served from."""
         ...
+
+    def save_video(self, owner_id: str, upload: UploadFile) -> str:
+        """Persist a video upload and return its URL."""
+        ...
+
+
+def _is_mp4(content: bytes) -> bool:
+    """MP4 carries 'ftyp' at offset 4, after the box-size prefix."""
+    return len(content) >= 12 and content[4:8] == b"ftyp"
 
 
 def _validated_bytes(upload: UploadFile) -> tuple[bytes, str]:
@@ -73,6 +95,35 @@ def _validated_bytes(upload: UploadFile) -> tuple[bytes, str]:
     return content, extension
 
 
+def _validated_video_bytes(upload: UploadFile) -> tuple[bytes, str]:
+    """Same checks for video, with its own type list and larger ceiling."""
+    extension = ALLOWED_VIDEO_TYPES.get(upload.content_type or "")
+    if extension is None:
+        raise ApiException(
+            422,
+            "Only MP4 and WebM videos are supported. Convert the file and try again.",
+            "VALIDATION_ERROR",
+        )
+
+    content = upload.file.read(MAX_VIDEO_BYTES + 1)
+    if len(content) > MAX_VIDEO_BYTES:
+        raise ApiException(
+            422,
+            f"Video exceeds the {MAX_VIDEO_BYTES // (1024 * 1024)} MB limit. "
+            "Trim it, compress it, or upload it to YouTube and paste the link.",
+            "VALIDATION_ERROR",
+        )
+    if not content:
+        raise ApiException(422, "The uploaded file is empty", "VALIDATION_ERROR")
+
+    if extension == ".mp4" and not _is_mp4(content):
+        raise ApiException(422, "That file is not a valid MP4 video", "VALIDATION_ERROR")
+    if extension == ".webm" and not content.startswith(_MAGIC_SIGNATURES[".webm"]):
+        raise ApiException(422, "That file is not a valid WebM video", "VALIDATION_ERROR")
+
+    return content, extension
+
+
 class LocalMediaStorage:
     """Local-disk media storage served under /media (docs/12 §1).
 
@@ -87,12 +138,17 @@ class LocalMediaStorage:
 
     def save_image(self, owner_id: str, upload: UploadFile) -> str:
         content, extension = _validated_bytes(upload)
+        return self._write(owner_id, content, extension)
 
+    def save_video(self, owner_id: str, upload: UploadFile) -> str:
+        content, extension = _validated_video_bytes(upload)
+        return self._write(owner_id, content, extension)
+
+    def _write(self, owner_id: str, content: bytes, extension: str) -> str:
         directory = self._root / owner_id
         directory.mkdir(parents=True, exist_ok=True)
         filename = f"{uuid.uuid4().hex}{extension}"
         (directory / filename).write_bytes(content)
-
         return f"/media/{owner_id}/{filename}"
 
 
@@ -122,15 +178,23 @@ class GcsMediaStorage:
 
     def save_image(self, owner_id: str, upload: UploadFile) -> str:
         content, extension = _validated_bytes(upload)
+        return self._upload(owner_id, content, extension, upload.content_type)
 
+    def save_video(self, owner_id: str, upload: UploadFile) -> str:
+        content, extension = _validated_video_bytes(upload)
+        return self._upload(owner_id, content, extension, upload.content_type)
+
+    def _upload(
+        self, owner_id: str, content: bytes, extension: str, content_type: str | None
+    ) -> str:
         blob_path = f"media/{owner_id}/{uuid.uuid4().hex}{extension}"
         try:
             blob = self._bucket().blob(blob_path)
             blob.cache_control = "public, max-age=31536000, immutable"
-            blob.upload_from_string(content, content_type=upload.content_type)
+            blob.upload_from_string(content, content_type=content_type)
         except Exception as exc:  # SDK raises a wide range of transport errors
             logger.exception("GCS upload failed for %s", blob_path)
-            raise StorageError(f"Could not store the image: {exc}") from exc
+            raise StorageError(f"Could not store the file: {exc}") from exc
 
         if self._public_base_url:
             return f"{self._public_base_url}/{blob_path}"

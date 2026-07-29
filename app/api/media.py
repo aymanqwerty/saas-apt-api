@@ -24,3 +24,16 @@ def upload_media(doctor: CurrentDoctor, file: UploadFile) -> ApiResponse[MediaUp
             502, "Could not store the image right now. Please try again.", "STORAGE_UNAVAILABLE"
         ) from exc
     return ApiResponse(message="File uploaded", data=MediaUploadData(url=url))
+
+
+@router.post("/upload-video", response_model=ApiResponse[MediaUploadData])
+def upload_video(doctor: CurrentDoctor, file: UploadFile) -> ApiResponse[MediaUploadData]:
+    """Separate from /upload because videos have their own types and size cap."""
+    try:
+        url = get_media_storage().save_video(str(doctor.id), file)
+    except StorageError as exc:
+        logger.error("Media storage unavailable: %s", exc)
+        raise ApiException(
+            502, "Could not store the video right now. Please try again.", "STORAGE_UNAVAILABLE"
+        ) from exc
+    return ApiResponse(message="Video uploaded", data=MediaUploadData(url=url))
