@@ -1,4 +1,3 @@
-import uuid
 from datetime import date
 
 from fastapi import APIRouter, Query, Request
@@ -6,7 +5,7 @@ from fastapi import APIRouter, Query, Request
 from app.dependencies.agent_auth import AgentDoctor
 from app.dependencies.database import DbSession
 from app.schemas.agent import (
-    AgentBookingRequest,
+    AgentBookingInput,
     AgentBookingResult,
     AgentClinic,
     AgentPatientLookup,
@@ -27,13 +26,17 @@ def list_clinics(doctor: AgentDoctor, db: DbSession) -> ApiResponse[list[AgentCl
     return ApiResponse(data=AgentService(db).list_clinics(doctor))
 
 
+# The identifier params below are typed `str`, not `uuid.UUID`, on purpose: a
+# hallucinated id would otherwise be rejected by FastAPI as a raw 422 that the
+# agent reads as "no availability". As strings they reach AgentService, which
+# answers with the valid choices so the agent can correct itself.
 @router.get("/availability", response_model=ApiResponse[list[date]])
 def availability(
     doctor: AgentDoctor,
     db: DbSession,
-    clinic_id: uuid.UUID,
-    date_from: date,
-    date_to: date,
+    clinic_id: str | None = Query(default=None),
+    date_from: str | None = Query(default=None),
+    date_to: str | None = Query(default=None),
 ) -> ApiResponse[list[date]]:
     return ApiResponse(data=AgentService(db).available_dates(doctor, clinic_id, date_from, date_to))
 
@@ -42,8 +45,8 @@ def availability(
 def slots(
     doctor: AgentDoctor,
     db: DbSession,
-    clinic_id: uuid.UUID,
-    slot_date: date,
+    clinic_id: str | None = Query(default=None),
+    slot_date: str | None = Query(default=None),
 ) -> ApiResponse[list[PublicSlot]]:
     return ApiResponse(data=AgentService(db).slots(doctor, clinic_id, slot_date))
 
@@ -57,7 +60,7 @@ def patient_lookup(
 
 @router.post("/bookings", response_model=ApiResponse[AgentBookingResult])
 def create_booking(
-    body: AgentBookingRequest, doctor: AgentDoctor, db: DbSession, request: Request
+    body: AgentBookingInput, doctor: AgentDoctor, db: DbSession, request: Request
 ) -> ApiResponse[AgentBookingResult]:
     result = AgentService(db).book(doctor, body, request=request)
     return ApiResponse(message=result.message, data=result)

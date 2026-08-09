@@ -375,7 +375,9 @@ class BookingService:
         payment_required, fee = self._resolve_payment(settings_row, clinic)
 
         if not payment_required:
-            appointment = self._create_appointment(doctor, clinic, slot, patient, data.reason)
+            appointment = self._create_appointment(
+                doctor, clinic, slot, patient, data.reason, source=BookingSource.VOICE_AGENT
+            )
             self._slots.mark_full_if_reached(slot.id)
             self._activity.record(
                 doctor.id, "BOOK_APPOINTMENT", "Appointment", appointment.id, request=request
@@ -502,7 +504,11 @@ class BookingService:
         if doctor is None or clinic is None or slot is None or patient is None:
             return
 
-        appointment = self._create_appointment(doctor, clinic, slot, patient, hold.visit_reason)
+        # Only agent bookings reach here: this path is driven by the payment-link
+        # webhook, and create_order (the website flow) never sets notes.hold_id.
+        appointment = self._create_appointment(
+            doctor, clinic, slot, patient, hold.visit_reason, source=BookingSource.VOICE_AGENT
+        )
         self._slots.mark_full_if_reached(slot.id)
         hold.status = HoldStatus.CONFIRMED
         payment.status = PaymentStatus.PAID
@@ -846,6 +852,7 @@ class BookingService:
         slot: Slot,
         patient: Patient,
         reason: str | None,
+        source: BookingSource = BookingSource.WEBSITE,
     ) -> Appointment:
         # `token_number` (MAX+1 per clinic-day) and `appointment_number` (random)
         # both carry unique constraints. Under concurrency two bookings can pick
@@ -861,7 +868,7 @@ class BookingService:
                 appointment_number=self._unique_appointment_number(),
                 token_number=self._appointments.next_token_number(clinic.id, slot.slot_date),
                 appointment_status=AppointmentStatus.CONFIRMED,
-                booking_source=BookingSource.WEBSITE,
+                booking_source=source,
                 visit_reason=reason,
                 doctor_name=doctor.full_name,
                 clinic_name=clinic.clinic_name,

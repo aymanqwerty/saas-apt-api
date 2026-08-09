@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 from app.core.security import hash_password
 from app.database.session import SessionLocal
 from app.models.activity_log import ActivityLog
-from app.models.appointment import Appointment, AppointmentStatus
+from app.models.appointment import Appointment, AppointmentStatus, BookingSource
 from app.models.appointment_hold import AppointmentHold, HoldStatus
 from app.models.availability_rule import AvailabilityRule
 from app.models.booking_session import BookingSession
@@ -231,3 +231,100 @@ def test_agent_paid_booking_sends_link_then_webhook_confirms(ctx: dict) -> None:
         assert pay.appointment_id is not None
         appt = db.get(Appointment, pay.appointment_id)
         assert appt.appointment_status == AppointmentStatus.CONFIRMED
+
+
+# --- Robustness against a hallucinating LLM -------------------------------
+# Production incident 2026-08-09: the agent sent clinic_id=456, got a raw 422
+# from FastAPI's UUID coercion, and told the caller "no slots are available".
+# These endpoints must answer an unusable id with the valid choices instead.
+
+
+def test_bogus_clinic_id_lists_valid_clinics(ctx: dict) -> None:
+    resp = client.get(f"{API}/agent/availability?clinic_id=456", headers=ctx["agent"])
+    assert resp.status_code == 400
+    body = resp.json()
+    assert body["error_code"] == "UNKNOWN_CLINIC"
+    # The agent must be able to recover from the message alone.
+    assert "Free Clinic" in body["message"]
+    assert ctx["free_clinic"] in body["message"]
+
+
+def test_unknown_uuid_clinic_is_rejected_with_choices(ctx: dict) -> None:
+    resp = client.get(
+        f"{API}/agent/slots?clinic_id=11111111-1111-1111-1111-111111111111&slot_date=2026-08-12",
+        headers=ctx["agent"],
+    )
+    assert resp.status_code == 400
+    assert resp.json()["error_code"] == "UNKNOWN_CLINIC"
+
+
+def test_missing_clinic_id_asks_which_clinic(ctx: dict) -> None:
+    resp = client.get(f"{API}/agent/availability", headers=ctx["agent"])
+    assert resp.status_code == 400
+    body = resp.json()
+    assert body["error_code"] == "CLINIC_REQUIRED"
+    assert "Paid Clinic" in body["message"]
+
+
+def test_clinic_can_be_named_instead_of_id(ctx: dict) -> None:
+    slot = ctx["free_slots"][-1]
+    resp = client.get(
+        f"{API}/agent/slots?clinic_id=Free Clinic&slot_date={slot['slot_date']}",
+        headers=ctx["agent"],
+    )
+    assert resp.status_code == 200, resp.text
+    assert any(s["id"] == slot["id"] for s in resp.json()["data"])
+
+
+def test_availability_defaults_to_the_next_30_days(ctx: dict) -> None:
+    # date_from/date_to omitted entirely — previously a 422.
+    resp = client.get(
+        f"{API}/agent/availability?clinic_id={ctx['free_clinic']}", headers=ctx["agent"]
+    )
+    assert resp.status_code == 200, resp.text
+    assert len(resp.json()["data"]) > 0
+
+
+def test_booking_falls_back_to_date_and_time(ctx: dict) -> None:
+    slot = ctx["free_slots"][-1]
+    resp = client.post(
+        f"{API}/agent/bookings",
+        headers=ctx["agent"],
+        json={"clinic_id": "Free Clinic", "slot_date": slot["slot_date"],
+              "start_time": slot["start_time"][:5], "name": "Time Booker",
+              "phone_number": "+91-8700000044", "mode": "direct"},
+    )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()["data"]
+    assert data["status"] == "confirmed"
+    assert data["appointment"]["start_time"] == slot["start_time"]
+
+
+def test_booking_with_unmatched_time_lists_open_times(ctx: dict) -> None:
+    slot = ctx["free_slots"][-1]
+    resp = client.post(
+        f"{API}/agent/bookings",
+        headers=ctx["agent"],
+        json={"clinic_id": ctx["free_clinic"], "slot_date": slot["slot_date"],
+              "start_time": "03:17", "name": "Wrong Time",
+              "phone_number": "+91-8700000045", "mode": "direct"},
+    )
+    assert resp.status_code == 400
+    body = resp.json()
+    assert body["error_code"] == "UNKNOWN_SLOT"
+    assert slot["start_time"][:5] in body["message"]
+
+
+def test_agent_booking_is_tagged_voice_agent(ctx: dict) -> None:
+    slot = ctx["free_slots"][-2]
+    resp = client.post(
+        f"{API}/agent/bookings",
+        headers=ctx["agent"],
+        json={"clinic_id": ctx["free_clinic"], "slot_id": slot["id"], "name": "Source Check",
+              "phone_number": "+91-8700000046", "mode": "direct"},
+    )
+    assert resp.status_code == 200, resp.text
+    appointment_number = resp.json()["data"]["appointment"]["appointment_number"]
+    with SessionLocal() as db:
+        appt = db.query(Appointment).filter_by(appointment_number=appointment_number).one()
+        assert appt.booking_source == BookingSource.VOICE_AGENT

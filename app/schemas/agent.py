@@ -43,6 +43,29 @@ class PhoneLookupRequest(BaseModel):
     phone_number: str = Field(min_length=7, max_length=20)
 
 
+class AgentBookingInput(BaseModel):
+    """What the voice agent actually sends.
+
+    Every identifier is a plain string, and each has a human-readable fallback,
+    because an LLM routinely mangles or invents a UUID. `AgentService` resolves
+    this into the strict `AgentBookingRequest` below, raising errors that tell
+    the agent exactly which value to use instead.
+    """
+
+    clinic_id: str | None = None  # id from list_clinics, or the clinic name
+    slot_id: str | None = None  # id from get_slots
+    slot_date: str | None = None  # with start_time, an alternative to slot_id
+    start_time: str | None = None  # "10:30", "10:30:00" or "10:30 AM"
+    name: str = Field(min_length=1, max_length=150)
+    phone_number: str = Field(min_length=7, max_length=20)
+    email: EmailStr | None = None
+    age: int | None = Field(default=None, ge=0, le=150)
+    gender: Gender | None = None
+    account_member_id: str | None = None
+    mode: Literal["direct", "review"] = "direct"
+    reason: str | None = Field(default=None, max_length=1000)
+
+
 class AgentBookingRequest(BaseModel):
     clinic_id: uuid.UUID
     slot_id: uuid.UUID
